@@ -1,5 +1,6 @@
 # Copyright © 2023 Kensho Technologies, LLC
 from typing import Iterable, Tuple, List, Optional, Dict, Union, Generator
+from abc import ABC, abstractmethod
 from types import GeneratorType
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from .paths import getDataFolder, getLogsFolder, getResultsFolder
 
 
 TextSource = Union[ Iterable[str], Union[str,Path] ]
+Reiterable = Iterable  # There isn't an actual type that represents "all iterables that DON'T have a next() method", so we fake it in the type annotations.
+
 
 def textSourceToIterable(source: TextSource) -> Iterable[str]:
     if isinstance(source, (str, Path)):
@@ -172,29 +175,36 @@ def load_corpus(corpus: TextSource, n_corpus_examples: Optional[int], cache_name
         return data
 
 
-def divide_data_by_num(data: List[str], num_procs: int) -> Iterable[List[str]]:
-    """
-    Split the data given the number of chunks we expect
-    Returns a generator
-    """
-    size_per_chunk = len(data) // num_procs
-    for i in range(0, len(data), size_per_chunk + 1):
-        yield data[i: i + size_per_chunk + 1]
+class DataDivider(ABC):
+    @abstractmethod
+    def getPart(self, i: int) -> Iterable[str]:
+        pass
 
 
-def divide_data_by_size(data, size):
-    """
-    Split the data given the size of chunks we expect
-    Returns a generator
-    """
-    for i in range(0, len(data), size):
-        yield data[i: i + size]
+class ListDivider(DataDivider):
+    def __init__(self, list_to_divide: List[str]):
+        self.list_to_divide = list_to_divide
 
 
-def split_iterable_into_generators(iterable: Iterable[str], n: int=1) -> List[Generator[str,None,None]]:
+class ListDivideIntoSize(ListDivider):
+
+    def __init__(self, list_to_divide: List[str], part_size: int):
+        super().__init__(list_to_divide)
+        self.part_size = part_size
+
+    def getPart(self, i: int) -> Iterable[str]:
+        return self.list_to_divide[i*self.part_size:(i+1)*self.part_size]
+
+
+class ListDivideIntoNumber(ListDivideIntoSize):
+
+    def __init__(self, list_to_divide: List[str], n_parts: int):
+        super().__init__(list_to_divide, part_size=len(list_to_divide) // n_parts)
+
+
+class IterableDivideIntoNumber(DataDivider):
     """
-    Copy the given iterable n times, then make it such that the new iterables only return once every n iterations offset
-    by their index in the new list. I.e., if the old iterable goes
+    If the old iterable goes
         a b c d e f g h
     and we split into 3 iterables, then they go
         a d g
@@ -203,23 +213,15 @@ def split_iterable_into_generators(iterable: Iterable[str], n: int=1) -> List[Ge
 
         c f
     """
-    return [generate_every(iterable, step=n, offset=i) for i in range(n)]
 
+    def __init__(self, reiterable: Reiterable[str], n_parts: int):
+        self.reiterable = reiterable
+        self.n_parts = n_parts
 
-def generate_every(iterable: Iterable, step: int, offset: int=0) -> Generator:
-    """
-    Step through an iterator with steps of any size, not just 1.
-    If the original iterator goes
-        a b c d e f
-    and (step,offset) = (2, 1) then the result goes
-        b d f
-    """
-    assert step > 0
-    assert offset < step
-
-    for i,thing in enumerate(iterable):
-        if (i-offset) % step == 0:  # i-offset is equivalent to i + (step-offset) in modular arithmetic, so when i == offset you get step % step == 0.
-            yield thing
+    def getPart(self, i: int) -> Iterable[str]:
+        for example_idx, example in enumerate(self.reiterable):
+            if (example_idx - i) % self.n_parts == 0:  # example_idx-i is equivalent to example_idx + (n_parts-i) in modular arithmetic, so when example_idx == i you get n_parts % n_parts == 0.
+                yield example
 
 
 def compute_losses(losses, all_triples, embeddings):
@@ -241,7 +243,8 @@ def compute_losses(losses, all_triples, embeddings):
 def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sage_model: SaGeTokenizer, workers_number: int):
     logging.info(f"Splitting data into {workers_number} chunks.")
     # data_chunk_gen = divide_data_by_num(partial_corpus, workers_number)
-    data_chunk_gen = split_iterable_into_generators(partial_corpus, n=workers_number)
+    # data_chunk_gen = split_iterable_into_generators(partial_corpus, n=workers_number)
+    data_divider = IterableDivideIntoNumber(partial_corpus, n_parts=workers_number)
 
     # these get aggregated over each chunk
     sage_losses = {}  # is token_id : loss
@@ -253,17 +256,18 @@ def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sag
     with mp.Pool(processes=workers_number) as pool:
         tasks = {}
 
-        for tid, data_chunk in enumerate(data_chunk_gen):
-            res = pool.apply_async(sage_per_chunk, args=(tid, sage_model, data_chunk, embeddings))
+        for tid in range(workers_number):
+            res = pool.apply_async(sage_per_chunk, args=(tid, sage_model, embeddings, data_divider))
             tasks[res] = tid
 
-        while tasks:
+        while tasks:  # Keep polling tasks for whether they are done.
+            # Get newly finished tasks. These will be deleted afterwards.
             results_ready_list = []
             for res, tid in tasks.items():
                 if res.ready():
                     results_ready_list.append((res, tid))
 
-            # process finished task results
+            # Process results for newly finished tasks.
             for res, tid in results_ready_list:
                 losses, total_tokens, total_triples, ab_sizes = res.get()
 
@@ -291,13 +295,12 @@ def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sag
     return overall_total_tokens, overall_total_triples, sage_losses, ablated_sizes
 
 
-def sage_per_chunk(tid: int, model: SaGeTokenizer, data: Iterable[str], embeddings: np.ndarray, chunk_size: int=10_000):
+def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data: DataDivider, chunk_size: int=10_000):
     """
     function that runs sage on each chunk of data (in parallelization)
     note: this is called from multiprocessing, so use print rather than logging
     """
-    print(f"Starting chunk {tid}, with {len(data)} lines of data")
-
+    print(f"Starting chunk {tid}.")
     start_time = time.time()
 
     # accumulate over all the data
@@ -313,13 +316,12 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, data: Iterable[str], embeddin
 
     fs_start = time.time()
     n_examples_seen = 0
-    for i, sentence in enumerate(data):
+    for i, sentence in enumerate(data.getPart(tid)):
         n_examples_seen += 1
         total_tokens += model.fast_sage(model.pretokenize(sentence), triples, ablated_sizes)
 
-        # if filled up chunk, then compute the losses
-        # to free up memory
-        if (i > 0) and (i % chunk_size == 0):
+        # if filled up chunk, compute the losses to free up memory
+        if i > 0 and i % chunk_size == 0:
             # take the total time here over all calls
             fs_time = time.time() - fs_start
             total_fs_time += fs_time
