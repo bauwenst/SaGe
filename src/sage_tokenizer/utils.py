@@ -20,6 +20,7 @@ from .paths import getDataFolder, getLogsFolder, getResultsFolder
 
 # only log code outside of multiprocessing
 # logger = logging.getLogger(__name__)
+from .paths import getDataFolder, getLogsFolder, getResultsFolder
 
 
 TextSource = Union[ Iterable[str], Union[str,Path] ]
@@ -344,8 +345,9 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data:
             triples = {}
 
     # compute for final partial chunk
-    compute_losses(losses, triples, embeddings)
-    total_triples += len(triples)
+    if triples:
+        compute_losses(losses, triples, embeddings)
+        total_triples += len(triples)
 
     # the triples can get quite large, so to avoid merging these
     # dict values, let's compute the losses in parallel too

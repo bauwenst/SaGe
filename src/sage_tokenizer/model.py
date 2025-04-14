@@ -1,5 +1,4 @@
 # Copyright © 2023 Kensho Technologies, LLC
-
 from typing import List, Dict, Union, Tuple, Iterable
 
 import numpy as np

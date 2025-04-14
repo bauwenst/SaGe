@@ -67,7 +67,6 @@ def train_embeddings(sage_model: SaGeTokenizer, partial_corpus: Iterable[str], w
         sg=word2vec_params.sg,
         workers=workers
     )
-
     embeddings = np.zeros(shape=(sage_model.vocab_size(), word2vec_params.D))
 
     for idx, token in sage_model.inv_str_vocab.items():
