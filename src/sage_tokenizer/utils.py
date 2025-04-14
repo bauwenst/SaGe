@@ -1,16 +1,18 @@
 # Copyright © 2023 Kensho Technologies, LLC
 from typing import Iterable, Tuple, List, Optional, Dict, Union, Generator
-
-import json
-import logging
-import multiprocessing as mp
-import random
-import time
+from types import GeneratorType
 from pathlib import Path
 
+import sys
+import json
+import time
+import random
+import logging
+import multiprocessing as mp
+
 import numpy as np
-from datasets import IterableDataset
 from scipy.special import expit
+from datasets import IterableDataset
 
 from .model import SaGeTokenizer
 from .paths import getDataFolder, getLogsFolder, getResultsFolder
@@ -55,6 +57,25 @@ class DictIterableAsStringIterable:
     def __iter__(self) -> Generator[str, None, None]:
         for d in self.dict_iterable:
             yield d[self.field]
+
+
+class TokenisedStringIterable:
+    """
+    GenSim expects a corpus consisting of whitespace-separated tokens, so this takes each sentences, pretokenises it,
+    tokenises it, and concatenates the resulting tokens with spaces.
+    """
+
+    def __init__(self, sentences: Iterable[str], tokeniser: SaGeTokenizer):
+        self.sentences = sentences
+        self.tokeniser = tokeniser
+
+    def __iter__(self) -> Generator[str, None, None]:
+        start = time.time()
+        logging.info(f"Tokenizing corpus...")
+        for i,s in enumerate(self.sentences):
+            if i % 5_000 == 0:
+                logging.info(f"\tTokenizing example {i}, time: {(time.time() - start):.2f} seconds")
+            yield " ".join(self.tokeniser.tokenize_to_encoded_str(self.tokeniser.pretokenize(s)))
 
 
 def write_vocab(vocab: Dict[bytes,int], filename: Path):
@@ -337,19 +358,21 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, data: Iterable[str], embeddin
     return losses, total_tokens, total_triples, ablated_sizes
 
 
-def init_logger(experiment_name: str):
+def init_logger(experiment_name: str, do_stdout_too: bool=False):
     timestamp_str = time.strftime("%Y%m%d_%H%M%S")
     log_filename = getLogsFolder() / f"{experiment_name}_{timestamp_str}.log"
-    logging.basicConfig(filename=log_filename.as_posix(),
-                        format="%(asctime)s - %(message)s",
-                        datefmt="%m/%d/%Y %H:%M:%S",
-                        level=logging.INFO)
-
-    print(f"Logs will be stored in {log_filename.as_posix()}")
+    logging.basicConfig(
+        handlers=[logging.FileHandler(log_filename.as_posix())] + do_stdout_too*[logging.StreamHandler(sys.stdout)],
+        format="[%(asctime)s @ %(name)s]: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        level=logging.INFO
+    )
+    print(f"{'All' if not do_stdout_too else 'A copy of the'} logs will be stored at {log_filename.as_posix()}")
 
 
 def get_output_folder(experiment_name: str) -> Tuple[Path, Path, Path]:
     results_path = getResultsFolder() / experiment_name
+    results_path.mkdir(exist_ok=True, parents=True)
 
     vocab_folder = results_path / "sage_vocabs"
     vocab_folder.mkdir(exist_ok=True)

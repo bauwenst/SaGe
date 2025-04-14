@@ -32,7 +32,8 @@ class SaGeVocabBuilder:
 
     def build_vocab(self, experiment_name: str,
                     initial_vocabulary: TextSource,
-                    corpus: TextSource, k_corpus_examples: Optional[int]=1_000, corpus_cache: Union[str,Path]="") -> Path:
+                    corpus: TextSource, k_corpus_examples: Optional[int]=1_000, corpus_cache: Union[str,Path]="",
+                    do_log_stdout: bool=False) -> Path:
         """
         :param experiment_name: Prefix for the outputs of this run.
         :param initial_vocabulary: The set of subwords to start from. The subwords are expected to be strings obtained
@@ -56,7 +57,7 @@ class SaGeVocabBuilder:
         """
         assert k_corpus_examples is None or k_corpus_examples >= 0
 
-        init_logger(experiment_name)
+        init_logger(experiment_name, do_stdout_too=do_log_stdout)
         logging.info(f"Start experiment {experiment_name}")
         logging.info(f"Process will use up to {self.workers_number} worker threads.")
 
@@ -70,7 +71,7 @@ class SaGeVocabBuilder:
 
         actual_max_len = max([len(v) for v in byte_vocab])
         if self.max_len != actual_max_len:
-            logging.warning(f"max_len parameter value {self.max_len} doesn't match actual max {actual_max_len}")
+            logging.warning(f"Note that the max_len parameter value {self.max_len} doesn't match actual max {actual_max_len}")
 
         logging.info("Initializing tokenizer")
         sage_model = SaGeTokenizer(byte_vocab, self.max_len)
@@ -84,7 +85,7 @@ class SaGeVocabBuilder:
             raise Exception("Vocabulary schedule must contain more than 2 vocabulary sizes!")
 
         vocab_schedule.sort(reverse=True)  # largest first
-        logging.info(f"initial vocab_schedule is {vocab_schedule[0]} vs actual size {sage_model.vocab_size()}")
+        logging.info(f"Initial vocab_schedule value is {vocab_schedule[0]} vs. actual size {sage_model.vocab_size()}")
 
         embedding_sizes = set(self.embeddings_schedule)
 
@@ -110,7 +111,7 @@ class SaGeVocabBuilder:
                                             self.workers_number, self.word2vec_params)
 
             if actual_vocab_size <= target_vocab_size:
-                logging.info(f"Actual vocab is already smaller than target. continue to next iteration ")
+                logging.info(f"Actual vocab is already smaller than target. SaGe won't be used. Continuing to next iteration.")
                 i += 1
                 continue
 

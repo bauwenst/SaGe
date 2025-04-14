@@ -12,7 +12,7 @@ from pathlib import Path
 from .Word2VecParams import Word2VecParams
 from .model import SaGeTokenizer
 from .paths import getDataFolder
-from .utils import FileAsStringIterable
+from .utils import FileAsStringIterable, TokenisedStringIterable
 
 
 def get_embeddings(vocab_size: int, embeddings_folder: Path, partial_corpus: Iterable[str], sage_model: SaGeTokenizer, workers_number: int, word2vec_params: Word2VecParams) -> np.ndarray:
@@ -36,14 +36,7 @@ def get_embeddings(vocab_size: int, embeddings_folder: Path, partial_corpus: Ite
 
 
 def train_embeddings(sage_model: SaGeTokenizer, partial_corpus: Iterable[str], workers: int, word2vec_params: Word2VecParams, embeddings_folder: Path) -> np.ndarray:
-
-    def tokenisedCorpus() -> Iterable[str]:
-        start = time.time()
-        logging.info(f"Tokenizing corpus...")
-        for i,s in enumerate(partial_corpus):
-            if i % 1_000_000 == 0:
-                logging.info(f"\tTokenizing example {i}, time: {(time.time() - start):.2f} seconds")
-            yield " ".join(sage_model.tokenize_to_encoded_str(sage_model.pretokenize(s)))  # GenSim expects a corpus consisting of whitespace-separated tokens.
+    tokenised_corpus = TokenisedStringIterable(partial_corpus, sage_model)
 
     if isinstance(partial_corpus, FileAsStringIterable):  # GenSim is accelerated for file-stored corpora (https://github.com/RaRe-Technologies/gensim/releases/tag/3.6.0 and https://github.com/RaRe-Technologies/gensim/blob/develop/docs/notebooks/Any2Vec_Filebased.ipynb).
         gensim_file = embeddings_folder / f"gensim_{sage_model.vocab_size()}.txt"
@@ -51,26 +44,28 @@ def train_embeddings(sage_model: SaGeTokenizer, partial_corpus: Iterable[str], w
             logging.info(f"Tokenized corpus already exists at {gensim_file.as_posix()}")
         else:
             with open(gensim_file, "w", encoding="utf-8") as handle:
-                for token_string in tokenisedCorpus():
+                for token_string in tokenised_corpus:
                     handle.write(token_string + "\n")
             logging.info(f"Tokenized data written at {gensim_file.as_posix()}")
 
         gensim_iterator = None
         gensim_file = gensim_file.as_posix()
     else:
-        gensim_iterator = tokenisedCorpus()
+        gensim_iterator = tokenised_corpus
         gensim_file = None
 
-    word2vec_model = gensim.models.Word2Vec(corpus_file=gensim_file,
-                                            sentences=gensim_iterator,
+    word2vec_model = gensim.models.Word2Vec(
+        corpus_file=gensim_file,
+        sentences=gensim_iterator,
 
-                                            vector_size=word2vec_params.D,
-                                            negative=word2vec_params.N,
-                                            alpha=word2vec_params.ALPHA,
-                                            window=word2vec_params.window_size,
-                                            min_count=word2vec_params.min_count,
-                                            sg=word2vec_params.sg,
-                                            workers=workers)
+        vector_size=word2vec_params.D,
+        negative=word2vec_params.N,
+        alpha=word2vec_params.ALPHA,
+        window=word2vec_params.window_size,
+        min_count=word2vec_params.min_count,
+        sg=word2vec_params.sg,
+        workers=workers
+    )
 
     embeddings = np.zeros(shape=(sage_model.vocab_size(), word2vec_params.D))
 
