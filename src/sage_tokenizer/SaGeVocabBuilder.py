@@ -10,6 +10,8 @@ from .model import SaGeTokenizer
 from .utils import init_logger, set_random_seed, load_vocab, get_output_folder, load_corpus, run_sage_parallel, \
     save_sorted_losses, save_stats, write_vocab, TextSource
 
+logger = logging.getLogger(__name__)
+
 
 class SaGeVocabBuilder:
 
@@ -58,105 +60,106 @@ class SaGeVocabBuilder:
         assert k_corpus_examples is None or k_corpus_examples >= 0
 
         init_logger(experiment_name, do_stdout_too=do_log_stdout)
-        logging.info(f"Start experiment {experiment_name}")
-        logging.info(f"Process will use up to {self.workers_number} worker threads.")
-
-        logging.info("Getting output directories")
+        logger.info(f"Start experiment {experiment_name}")
+        logger.info(f"Process will use up to {self.workers_number} worker threads.")
+        logger.info("Getting output directories")
         embeddings_folder, stats_folder, vocab_folder = get_output_folder(experiment_name)
-        logging.info("Setting random seed")
+        logger.info("Setting random seed")
         set_random_seed(experiment_name, self.random_seed)
-        logging.info(f"Loading initial vocabulary...")
+        logger.info(f"Loading initial vocabulary...")
         byte_vocab = load_vocab(initial_vocabulary)
-        logging.info(f"Finished loading initial vocabulary. Vocabulary size: {len(byte_vocab)}")
+        logger.info(f"Finished loading initial vocabulary. Vocabulary size: {len(byte_vocab)}")
 
         actual_max_len = max([len(v) for v in byte_vocab])
         if self.max_len != actual_max_len:
-            logging.warning(f"Note that the max_len parameter value {self.max_len} doesn't match actual max {actual_max_len}")
+            logger.warning(f"Note that the max_len parameter value {self.max_len} doesn't match actual max {actual_max_len}")
 
-        logging.info("Initializing tokenizer")
+        logger.info("Initializing tokenizer")
         sage_model = SaGeTokenizer(byte_vocab, self.max_len)
-
-        logging.info(f"Loading corpus...")
+        logger.info(f"Loading corpus...")
         partial_corpus = load_corpus(corpus, n_corpus_examples=1000*k_corpus_examples if k_corpus_examples else None, cache_name_or_path=corpus_cache, seed=self.random_seed)
-        logging.info("Starting the training loop")
+        logger.info("Starting the training loop")
         vocab_schedule = self.full_vocab_schedule
 
         if not len(vocab_schedule) >= 2:
             raise Exception("Vocabulary schedule must contain more than 2 vocabulary sizes!")
 
         vocab_schedule.sort(reverse=True)  # largest first
-        logging.info(f"Initial vocab_schedule value is {vocab_schedule[0]} vs. actual size {sage_model.vocab_size()}")
+        logger.info(f"Initial vocab_schedule value is {vocab_schedule[0]} vs. actual size {sage_model.vocab_size()}")
 
         embedding_sizes = set(self.embeddings_schedule)
 
-        # initialize embeddings for first iteration
-        embeddings = get_embeddings(vocab_schedule[0], embeddings_folder, partial_corpus, sage_model,
-                                    self.workers_number, self.word2vec_params)
-
         # skipping the initial vocab size here
         i = 0
-        # stop one before the end, since we do i+1,
-        # so we'll make the vocab of that final size, but won't do the tokenization on it
-        while i < len(vocab_schedule) - 1:
+        compute_embeddings_at_size = vocab_schedule[0]
+        embeddings_up_to_date = False
+        embeddings = None
+
+        while i < len(vocab_schedule) - 1:  # -1 because the last vocab size is only a target, but never current.
             current_step_vocab_size = vocab_schedule[i]  # this will be the label used for files
-            target_vocab_size = vocab_schedule[i + 1]
+            target_vocab_size       = vocab_schedule[i+1]
             actual_vocab_size = sage_model.vocab_size()
-            logging.info(f"\nRound {i} - Start: "
-                         f"\n\tCurrent step vocabulary size: {current_step_vocab_size}, "
-                         f"\n\tTarget vocabulary size: {target_vocab_size}, "
-                         f"\n\tActual vocabulary size: {actual_vocab_size}")
+            logger.info(f"\nRound {i+1} - Start: "
+                        f"\n\tCurrent step vocabulary size: {current_step_vocab_size}"
+                        f"\n\tTarget vocabulary size: {target_vocab_size}"
+                        f"\n\tActual vocabulary size: {actual_vocab_size}")
 
             if vocab_schedule[i] in embedding_sizes:
-                embeddings = get_embeddings(current_step_vocab_size, embeddings_folder, partial_corpus, sage_model,
-                                            self.workers_number, self.word2vec_params)
+                compute_embeddings_at_size = vocab_schedule[i]
+                embeddings_up_to_date = False
 
             if actual_vocab_size <= target_vocab_size:
-                logging.info(f"Actual vocab is already smaller than target. SaGe won't be used. Continuing to next iteration.")
+                logger.info(f"Actual vocab is already smaller than target. SaGe won't be used. Continuing to next iteration.")
                 i += 1
                 continue
 
+            if not embeddings_up_to_date:
+                embeddings = get_embeddings(compute_embeddings_at_size, embeddings_folder, partial_corpus, sage_model,
+                                            self.workers_number, self.word2vec_params)
+                embeddings_up_to_date = True
+
             # call sage in parallel
-            logging.info(f"Sage started.")
+            logger.info(f"Sage started.")
             total_tokens, total_triples, token_to_losses, ablated_sizes = run_sage_parallel(embeddings,
                                                                                             partial_corpus,
                                                                                             sage_model,
                                                                                             self.workers_number)
-            logging.info(f"Sage finished. total tokens: {total_tokens}, total triplets: {total_triples}")
+            logger.info(f"Sage finished. total tokens: {total_tokens}, total triplets: {total_triples}")
 
             # token_to_losses won't include any single byte tokens, but we want to keep those around
             # so lets just add them with large scores, so they stay around
             vocab_size_before_single_byte_tokens_addition = len(token_to_losses)
             sage_model.add_all_byte_ids(token_to_losses, score=1e6)
-            logging.info(f"Adding single bytes to vocab. Size before: {vocab_size_before_single_byte_tokens_addition}, "
-                         f"size after: {len(token_to_losses)}")
+            logger.info(f"Adding single bytes to vocab. Size before: {vocab_size_before_single_byte_tokens_addition}, "
+                        f"size after: {len(token_to_losses)}")
 
             # if a token doesn't appear in token_to_losses then it didn't participate in the tokenization
             current_active_vocab_size = len(token_to_losses)
             current_inactive_vocab_size = actual_vocab_size - len(token_to_losses)
-            logging.info(f"Actual vocab size: {actual_vocab_size}, "
-                         f"Target vocab size: {target_vocab_size}, "
-                         f"Active Vocab Size: {current_active_vocab_size}, "
-                         f"Inactive Vocab Size: {current_inactive_vocab_size}")
+            logger.info(f"Actual vocab size: {actual_vocab_size}, "
+                        f"Target vocab size: {target_vocab_size}, "
+                        f"Active Vocab Size: {current_active_vocab_size}, "
+                        f"Inactive Vocab Size: {current_inactive_vocab_size}")
 
             # how many of the losses are negative
             neg_loss  = len([loss for loss in token_to_losses.values() if loss < 0.0])
             zero_loss = len([loss for loss in token_to_losses.values() if loss == 0.0])
             pos_loss  = len([loss for loss in token_to_losses.values() if loss > 0.0])
-            logging.info(f"Negative losses: {neg_loss}, zero losses: {zero_loss}, positive losses: {pos_loss}")
+            logger.info(f"Negative losses: {neg_loss}, zero losses: {zero_loss}, positive losses: {pos_loss}")
 
             # in case the active vocab we found is actually smaller than the target vocab,
             # change the target to the next one, until it's smaller than the vocab we found,
             # so the ablation part will actually do something
             while current_active_vocab_size <= target_vocab_size:
-                logging.info(f"Active vocab size is {current_active_vocab_size} - "
-                             f"smaller than target {target_vocab_size}. Moving to next target_vocab_size"
-                             f"\n\n(Round number increased to {i + 1})\n")
+                logger.info(f"Active vocab size is {current_active_vocab_size} - "
+                            f"smaller than target {target_vocab_size}. Moving to next target_vocab_size"
+                            f"\n\n(Round number increased to {i + 1})\n")
                 i += 1
                 target_vocab_size = vocab_schedule[i + 1]
-                logging.info(f"New target_vocab_size: {target_vocab_size}")
+                logger.info(f"New target_vocab_size: {target_vocab_size}")
 
             num_tokens_to_prune = current_active_vocab_size - target_vocab_size
-            logging.info(f"Num tokens to prune {num_tokens_to_prune}")
+            logger.info(f"Num tokens to prune {num_tokens_to_prune}")
 
             ######################
             # do the ablation
@@ -195,26 +198,26 @@ class SaGeVocabBuilder:
                              if tok in tokens_to_prune}
 
             vocab_save_name = vocab_folder / f"sage_vocab_{target_vocab_size}.vocab"
-            logging.info(f"Saving intermediate vocab of size {len(target_vocab)} to {vocab_save_name.as_posix()}")
+            logger.info(f"Saving intermediate vocab of size {len(target_vocab)} to {vocab_save_name.as_posix()}")
             write_vocab(target_vocab, vocab_save_name)
 
             active_save_name = vocab_folder / f"active_vocab_{target_vocab_size}.vocab"
-            logging.info(f"Saving active vocab of size {len(active_vocab)} to {active_save_name.as_posix()}")
+            logger.info(f"Saving active vocab of size {len(active_vocab)} to {active_save_name.as_posix()}")
             write_vocab(active_vocab, active_save_name)
 
             # save the deleted ones too for analysis, with the original size
             deleted_save_name = vocab_folder / f"deleted_vocab_{target_vocab_size}.vocab"
-            logging.info(f"Saving deleted vocab of size {len(deleted_vocab)} to {deleted_save_name.as_posix()}")
+            logger.info(f"Saving deleted vocab of size {len(deleted_vocab)} to {deleted_save_name.as_posix()}")
             write_vocab(deleted_vocab, deleted_save_name)
 
             # now update the internal state of sage_model to use the new smaller vocab
             # pass in list of bytes keys, which keep insertion order
             sage_model.set_vocabulary(list(target_vocab.keys()))
 
-            logging.info(f"\nRound {i} - End: "
-                         f"\n\tCurrent step vocabulary size: {current_step_vocab_size}, "
-                         f"\n\tTarget vocabulary size: {target_vocab_size}, "
-                         f"\n\tActual vocabulary size:{len(active_vocab)}")
+            logger.info(f"\nRound {i} - End: "
+                        f"\n\tCurrent step vocabulary size: {current_step_vocab_size}, "
+                        f"\n\tTarget vocabulary size: {target_vocab_size}, "
+                        f"\n\tActual vocabulary size:{len(active_vocab)}")
 
             # advance to next smaller size
             i += 1

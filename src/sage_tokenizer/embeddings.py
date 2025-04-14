@@ -11,26 +11,27 @@ from pathlib import Path
 
 from .Word2VecParams import Word2VecParams
 from .model import SaGeTokenizer
-from .paths import getDataFolder
 from .utils import FileAsStringIterable, TokenisedStringIterable
+
+logger = logging.getLogger(__file__)
 
 
 def get_embeddings(vocab_size: int, embeddings_folder: Path, partial_corpus: Iterable[str], sage_model: SaGeTokenizer, workers_number: int, word2vec_params: Word2VecParams) -> np.ndarray:
-    logging.info(f"training Embeddings at vocab size {vocab_size}")
+    logger.info(f"Training embeddings at vocab size {vocab_size}")
     embeddings_folder = Path(embeddings_folder)
 
     # is there an embedding of this size
     embeddings_filepath = embeddings_folder / f"embeddings_{vocab_size}.npy"
     if embeddings_filepath.exists():
-        logging.info(f"Found trained embeddings. Loading it from {embeddings_filepath.as_posix()}")
+        logger.info(f"Found trained embeddings. Loading it from {embeddings_filepath.as_posix()}")
         # context and target embeddings are the same so just keep one copy around
         embeddings = np.load(embeddings_filepath.as_posix())
     else:
-        logging.info(f"Start training embeddings with Word2Vec...")
+        logger.info(f"Start training embeddings with Word2Vec...")
         start_time = time.time()
         embeddings = train_embeddings(sage_model, partial_corpus, workers_number, word2vec_params, embeddings_folder)
-        logging.info(f"Embeddings time: {time.time() - start_time}")
-        logging.info(f"Save embeddings to {embeddings_filepath.as_posix()}")
+        logger.info(f"Embeddings time: {time.time() - start_time}")
+        logger.info(f"Save embeddings to {embeddings_filepath.as_posix()}")
         np.save(embeddings_filepath.as_posix(), embeddings, allow_pickle=True)
     return embeddings
 
@@ -41,12 +42,12 @@ def train_embeddings(sage_model: SaGeTokenizer, partial_corpus: Iterable[str], w
     if isinstance(partial_corpus, FileAsStringIterable):  # GenSim is accelerated for file-stored corpora (https://github.com/RaRe-Technologies/gensim/releases/tag/3.6.0 and https://github.com/RaRe-Technologies/gensim/blob/develop/docs/notebooks/Any2Vec_Filebased.ipynb).
         gensim_file = embeddings_folder / f"gensim_{sage_model.vocab_size()}.txt"
         if gensim_file.exists():  # Caching
-            logging.info(f"Tokenized corpus already exists at {gensim_file.as_posix()}")
+            logger.info(f"Tokenized corpus already exists at {gensim_file.as_posix()}")
         else:
             with open(gensim_file, "w", encoding="utf-8") as handle:
                 for token_string in tokenised_corpus:
                     handle.write(token_string + "\n")
-            logging.info(f"Tokenized data written at {gensim_file.as_posix()}")
+            logger.info(f"Tokenized data written at {gensim_file.as_posix()}")
 
         gensim_iterator = None
         gensim_file = gensim_file.as_posix()
