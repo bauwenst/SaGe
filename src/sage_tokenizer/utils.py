@@ -145,7 +145,8 @@ def load_corpus(corpus: TextSource, n_corpus_examples: Optional[int], cache_name
         return FileAsStringIterable(cache_path)
 
     corpus = textSourceToIterable(corpus)
-    data = IterableDataset.from_generator(lambda: ({"text": s.strip().replace("\n", " ")} for s in corpus))  # It's actually "from_thingThatMakesGenerator", not "from_generator".
+    data = IterableDataset.from_generator(generator=corpusToExamples, gen_kwargs={"corpus": corpus})  # It's actually "from_thingThatMakesGenerator", not "from_generator".
+    # data = IterableDataset.from_generator(lambda: ({"text": s.strip().replace("\n", " ")} for s in corpus))  # It's actually "from_thingThatMakesGenerator", not "from_generator".
     data = data.shuffle(buffer_size=1_000_000, seed=seed)
     data = data.take(n_corpus_examples) if n_corpus_examples else data
     data = DictIterableAsStringIterable(data)
@@ -174,6 +175,10 @@ def load_corpus(corpus: TextSource, n_corpus_examples: Optional[int], cache_name
         return FileAsStringIterable(cache_path)
     else:
         return data
+
+
+def corpusToExamples(corpus: Iterable[str]) -> Iterable[Dict[str,str]]:
+    return ({"text": s.strip().replace("\n", " ")} for s in corpus)
 
 
 class DataDivider(ABC):
