@@ -258,6 +258,7 @@ def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sag
     overall_total_triples = 0
     ablated_sizes = {}
     start_time = time.time()
+    latest_print = time.time()
     logging.info(f"Start spawning processes...")
     with mp.Pool(processes=workers_number) as pool:
         tasks = {}
@@ -296,17 +297,19 @@ def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sag
                 logging.info(f"task {tid} finished after {(time.time() - start_time):.2f} seconds. "
                              f"Tokens:{total_tokens}, triples:{total_triples}, active:{len(sage_losses)}")
 
-            logging.info(f"Sleeping 1 second. Number of still running tasks: {len(tasks)}")
+            if time.time() - latest_print > 60:
+                logging.info(f"Still polling {len(tasks)} incomplete tasks.")
+                latest_print = time.time()
             time.sleep(1.0)
     return overall_total_tokens, overall_total_triples, sage_losses, ablated_sizes
 
 
-def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data: DataDivider, chunk_size: int=10_000):
+def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data: DataDivider, chunk_size: int=10000, progress_size: int=1000):
     """
     function that runs sage on each chunk of data (in parallelization)
     note: this is called from multiprocessing, so use print rather than logging
     """
-    print(f"Starting chunk {tid}.")
+    print(f"Running SaGe on part {tid} of the dataset.")
     start_time = time.time()
 
     # accumulate over all the data
@@ -317,31 +320,35 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data:
     ablated_sizes = {}
     total_tokens = 0
     total_triples = 0
-    total_fs_time = 0.0
-    total_cl_time = 0.0
+    total_fastsage_time = 0.0
+    total_computeloss_time = 0.0
 
-    fs_start = time.time()
+    start_fastsage = time.time()
     n_examples_seen = 0
     for i, sentence in enumerate(data.getPart(tid)):
         n_examples_seen += 1
         total_tokens += model.fast_sage(model.pretokenize(sentence), triples, ablated_sizes)
 
+        if i > 0 and i % progress_size == 0:
+            print(f"SaGe {tid} is at row {i+1}. Will free memory at row {chunk_size}.")
+
         # if filled up chunk, compute the losses to free up memory
         if i > 0 and i % chunk_size == 0:
-            # take the total time here over all calls
-            fs_time = time.time() - fs_start
-            total_fs_time += fs_time
-            # reinitialize fs_start
-            fs_start = time.time()
+            # Total time over all calls to fast_sage.
+            duration_fastsage = time.time() - start_fastsage
+            total_fastsage_time += duration_fastsage
+            start_fastsage = time.time()  # TODO: Are we sure we don't want this AFTER the call to compute_losses?
 
-            cl_start = time.time()
+            start_computeloss = time.time()
             compute_losses(losses, triples, embeddings)
-            cl_time = time.time() - cl_start
-            total_cl_time += cl_time
+            duration_computeloss = time.time() - start_computeloss
+            total_computeloss_time += duration_computeloss
 
-            print(f"fast_sage {tid}, row {i+1}, "
-                  f"fs_time: {fs_time:.2f}, cl_time: {cl_time:.2f}, "
-                  f"triples: {len(triples)}, tokens: {total_tokens}")
+            print(f"SaGe {tid} finished a chunk at row {i+1}."
+                  f"\n\tTime spent on fast_sage in this chunk: {duration_fastsage:.2f}"
+                  f"\n\tTime spent on compute_losses in this chunk: {duration_computeloss:.2f}"
+                  f"\n\tTriples in this chunk: {len(triples)}. "
+                  f"\n\tTokens so far: {total_tokens}. Triples so far: {total_triples}")
 
             # total these up
             total_triples += len(triples)
@@ -357,7 +364,7 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data:
     # the triples can get quite large, so to avoid merging these
     # dict values, let's compute the losses in parallel too
     print(f"final fast_sage {tid}, row {n_examples_seen} of {n_examples_seen}, "
-          f"fs_time: {total_fs_time:.2f}, cl_time: {total_cl_time:.2f}, time: {(time.time() - start_time):.2f}, "
+          f"fs_time: {total_fastsage_time:.2f}, cl_time: {total_computeloss_time:.2f}, time: {(time.time() - start_time):.2f}, "
           f"triples: {len(triples)}, tokens: {total_tokens}")
 
     # Extra negative sign for equation (1) in SaGe paper
