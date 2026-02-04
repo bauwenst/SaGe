@@ -41,11 +41,6 @@ class SaGeVocabBuilder:
         :param initial_vocabulary: The set of subwords to start from. The subwords are expected to be strings obtained
                                    by converting the actual subword strings to UTF-8 bytes and then converting those to
                                    hexadecimal.
-                                   - If you have them as a set of strings V taken from the full Unicode domain, we expect
-                                     {token.encode("utf-8").hex() for token in V}.
-                                   - If you have them as a set of strings V in some custom pretokenisation space (e.g. with
-                                     HuggingFace encoding, with boundary markers, ...), you're out of luck currently.
-                                     You can try to invert your
         :param corpus: Either an iterable of string examples, or a text file. If the latter, every newline starts a new example.
                        Note: must NOT be an iteraTOR, i.e. it must be possible to iterate over this multiple times without it being consumed afterwards.
         :param k_corpus_examples: How many k's (thousands) of examples to sample from the corpus.

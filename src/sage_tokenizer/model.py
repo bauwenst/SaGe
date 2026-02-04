@@ -150,6 +150,8 @@ class SaGeTokenizer:
         Returns the total_tokens from tokenizing `sent`.
         """
         n = len(sent)
+        if n == 0:
+            return 0
 
         # returns triples of (ids, start_index, width)
         values = self.tokenize(sent)

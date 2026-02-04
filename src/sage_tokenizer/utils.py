@@ -88,10 +88,8 @@ def write_vocab(vocab: Dict[bytes,int], filename: Path):
     Saved in same order by index, so should preserve order.
     No special tokens are added.
     """
-    byindex = sorted([(idx, token) for token, idx in vocab.items()])
-
     with open(filename, "w", encoding="utf-8") as f:
-        for _, token in byindex:
+        for token in sorted(vocab.keys(), key=vocab.get):
             f.write(token.hex() + "\n")
 
 
@@ -325,15 +323,15 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data:
 
     start_fastsage = time.time()
     n_examples_seen = 0
-    for i, sentence in enumerate(data.getPart(tid)):
-        n_examples_seen += 1
+    for sentence in data.getPart(tid):
         total_tokens += model.fast_sage(model.pretokenize(sentence), triples, ablated_sizes)
+        n_examples_seen += 1
 
-        if i > 0 and i % progress_size == 0:
-            print(f"SaGe {tid} is at row {i+1}. Will free memory at row {chunk_size}.")
+        if n_examples_seen % progress_size == 0:
+            print(f"SaGe thread {tid} has processed {n_examples_seen} rows. (Memory is freed every {chunk_size} rows.)")
 
         # if filled up chunk, compute the losses to free up memory
-        if i > 0 and i % chunk_size == 0:
+        if n_examples_seen % chunk_size == 0:
             # Total time over all calls to fast_sage.
             duration_fastsage = time.time() - start_fastsage
             total_fastsage_time += duration_fastsage
@@ -344,7 +342,7 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data:
             duration_computeloss = time.time() - start_computeloss
             total_computeloss_time += duration_computeloss
 
-            print(f"SaGe {tid} finished a chunk at row {i+1}."
+            print(f"SaGe {tid} finished a chunk after {n_examples_seen} rows."
                   f"\n\tTime spent on fast_sage in this chunk: {duration_fastsage:.2f}"
                   f"\n\tTime spent on compute_losses in this chunk: {duration_computeloss:.2f}"
                   f"\n\tTriples in this chunk: {len(triples)}. "
