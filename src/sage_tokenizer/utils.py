@@ -228,7 +228,7 @@ class IterableDivideIntoNumber(DataDivider):
                 yield example
 
 
-def compute_losses(losses, all_triples, embeddings):
+def compute_losses(losses: dict[int,float], all_triples: dict[tuple[int,int,int], int], embeddings):
     """
     function for computing losses given triple counts and embeddings
     losses : accumulate losses per ablated token, excluding the single byte ones, side effect this
@@ -244,17 +244,17 @@ def compute_losses(losses, all_triples, embeddings):
         losses[ablated_token_id] = losses.get(ablated_token_id, 0.0) + triples_loss[idx]
 
 
-def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sage_model: SaGeTokenizer, workers_number: int):
+def run_sage_parallel(embeddings: np.ndarray, partial_corpus: Iterable[str], sage_model: SaGeTokenizer, workers_number: int) -> tuple[int, int, dict[int,float], dict[int,int]]:
     logging.info(f"Splitting data into {workers_number} chunks.")
     # data_chunk_gen = divide_data_by_num(partial_corpus, workers_number)
     # data_chunk_gen = split_iterable_into_generators(partial_corpus, n=workers_number)
     data_divider = IterableDivideIntoNumber(partial_corpus, n_parts=workers_number)
 
     # these get aggregated over each chunk
-    sage_losses = {}  # is token_id : loss
+    sage_losses: dict[int,float] = {}  # is token_id : loss
     overall_total_tokens = 0
     overall_total_triples = 0
-    ablated_sizes = {}
+    ablated_sizes: dict[int,int] = {}
     start_time = time.time()
     latest_print = time.time()
     logging.info(f"Start spawning processes...")
@@ -314,8 +314,8 @@ def sage_per_chunk(tid: int, model: SaGeTokenizer, embeddings: np.ndarray, data:
     losses = {}
 
     # these accumulate over each size
-    triples = {}
-    ablated_sizes = {}
+    triples: dict[tuple[int,int,int], int] = {}
+    ablated_sizes: dict[int,int] = {}
     total_tokens = 0
     total_triples = 0
     total_fastsage_time = 0.0

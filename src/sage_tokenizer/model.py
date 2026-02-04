@@ -121,7 +121,7 @@ class SaGeTokenizer:
         return [self.inv_byte_vocab[token_id] for token_id in self.tokenize(sent, tokens_only=True)]
 
     @staticmethod
-    def do_triples(combined, pad: int, padleft, padright, cur_id, sign, triples):
+    def do_triples(combined, pad: int, padleft: int, padright: int, cur_id: int, sign: int, triples: dict[tuple[int,int,int], int]):
         """
         Add the appropriate (t,v,v') triples to our dictionary where t, v, and v' are all int indices.
         """
@@ -143,7 +143,7 @@ class SaGeTokenizer:
                     # add sign to the triples
                     triples[trip] = triples.get(trip, 0) + sign
 
-    def fast_sage(self, sent: Tokenizable, triples, ablated_sizes, pad: int=2, verbose: bool=False) -> int:
+    def fast_sage(self, sent: Tokenizable, triples: dict[tuple[int,int,int], int], ablated_sizes: dict[int,int], pad: int=2, verbose: bool=False) -> int:
         """
         Tokenize the sentence `sent`, add to the counts in the triples dict tracking the (cur_id,t,c) for the ablated
         token cur_id, with target token t and context token c. Also updates the statistics in ablated_sizes.

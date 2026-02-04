@@ -90,6 +90,8 @@ class SaGeVocabBuilder:
         embeddings_up_to_date = False
         embeddings = None
 
+        path_full_vocab: Path = None
+        ever_active_types: set[int] = set()
         while i < len(vocab_schedule) - 1:  # -1 because the last vocab size is only a target, but never current.
             current_step_vocab_size = vocab_schedule[i]  # this will be the label used for files
             target_vocab_size       = vocab_schedule[i+1]
@@ -123,18 +125,28 @@ class SaGeVocabBuilder:
 
             # token_to_losses won't include any single byte tokens, but we want to keep those around
             # so lets just add them with large scores, so they stay around
-            vocab_size_before_single_byte_tokens_addition = len(token_to_losses)
+            current_active_vocab_size_before_ensuring_alphabet = len(token_to_losses)
             sage_model.add_all_byte_ids(token_to_losses, score=1e6)
-            logger.info(f"Adding single bytes to vocab. Size before: {vocab_size_before_single_byte_tokens_addition}, "
+            logger.info(f"Adding single bytes to vocab. Size before: {current_active_vocab_size_before_ensuring_alphabet}, "
                         f"size after: {len(token_to_losses)}")
 
-            # if a token doesn't appear in token_to_losses then it didn't participate in the tokenization
+            # If a token doesn't appear in token_to_losses, it didn't participate in the tokenization.
+            #
+            # There are three types of vocabularies in SaGe: the actual vocab, the active vocab, and the inactive vocab.
+            #   - the actual vocab is all types that have not been pruned.
+            #   - the active vocab is all types that have been seen in the latest tokenisation of the corpus. These are the types we can actually say anything about.
+            #   - the inactive vocab is all types that are actual but not active. We know nothing about these.
+            # When we prune to get to the next target size, we calculate how many types we need to drop, and then we
+            # take away types from the actual vocab by looking at the least impactful ACTIVE types.
+            # This means that when a type never appears in the corpus, it will actually be preserved since it is never active.
             current_active_vocab_size = len(token_to_losses)
             current_inactive_vocab_size = actual_vocab_size - len(token_to_losses)
             logger.info(f"Actual vocab size: {actual_vocab_size}, "
                         f"Target vocab size: {target_vocab_size}, "
-                        f"Active Vocab Size: {current_active_vocab_size}, "
-                        f"Inactive Vocab Size: {current_inactive_vocab_size}")
+                        f"Active vocab size (before pruning): {current_active_vocab_size}, "
+                        f"Inactive vocab size: {current_inactive_vocab_size}")
+
+            ever_active_types.update(token_to_losses.keys())
 
             # how many of the losses are negative
             neg_loss  = len([loss for loss in token_to_losses.values() if loss < 0.0])
@@ -146,15 +158,20 @@ class SaGeVocabBuilder:
             # change the target to the next one, until it's smaller than the vocab we found,
             # so the ablation part will actually do something
             while current_active_vocab_size <= target_vocab_size:
-                logger.info(f"Active vocab size is {current_active_vocab_size} - "
+                logger.info(f"Active vocab size is {current_active_vocab_size}, which is "
                             f"smaller than target {target_vocab_size}. Moving to next target_vocab_size"
-                            f"\n\n(Round number increased to {i + 1})\n")
+                            f"\n\n(Round increased to {i + 1})\n")
                 i += 1
-                target_vocab_size = vocab_schedule[i + 1]
+                if i == len(vocab_schedule) - 1:
+                    logger.info("The active vocab is so small that we don't even have enough information to prune any type. Terminating here.")
+                    target_vocab_size = current_active_vocab_size
+                    break
+                target_vocab_size = vocab_schedule[i+1]
                 logger.info(f"New target_vocab_size: {target_vocab_size}")
 
-            num_tokens_to_prune = current_active_vocab_size - target_vocab_size
-            logger.info(f"Num tokens to prune {num_tokens_to_prune}")
+            n_types_to_prune = current_active_vocab_size - target_vocab_size  # TODO: This formula is strange, because the actual vocab size may be much larger than the target vocab size after pruning this amount of types.
+            assert n_types_to_prune >= 0
+            logger.info(f"Types to prune: {n_types_to_prune}")
 
             ######################
             # do the ablation
@@ -164,57 +181,67 @@ class SaGeVocabBuilder:
             sorted_losses = list(sorted([(loss, tid) for (tid, loss) in token_to_losses.items()]))
             save_sorted_losses(sage_model, sorted_losses, target_vocab_size, vocab_folder)
 
-            stats = {
-                "current_step_vocab_size": current_step_vocab_size, "total_tokens": total_tokens,
-                "total_triples": total_triples, "current_active_vocab_size": current_active_vocab_size,
-                "current_inactive_vocab_size": current_inactive_vocab_size, "neg_loss": neg_loss,
-                "zero_loss": zero_loss, "pos_loss": pos_loss, "target_vocab_size": target_vocab_size,
-                "num_tokens_to_prune": num_tokens_to_prune, "ablated_sizes": ablated_sizes,
-            }
-            save_stats(stats, stats_folder, target_vocab_size)
+            save_stats({
+                "current_step_vocab_size": current_step_vocab_size,
+                "total_tokens": total_tokens,
+                "total_triples": total_triples,
+                "current_active_vocab_size": current_active_vocab_size,
+                "current_inactive_vocab_size": current_inactive_vocab_size,
+                "neg_loss": neg_loss,
+                "zero_loss": zero_loss,
+                "pos_loss": pos_loss,
+                "target_vocab_size": target_vocab_size,
+                "num_tokens_to_prune": n_types_to_prune,
+                "ablated_sizes": ablated_sizes,
+            }, stats_folder, target_vocab_size)
 
             # these are the tokens to be removed
-            tokens_to_prune = {sage_model.id_to_bytes(tid) for (loss, tid) in sorted_losses[:num_tokens_to_prune]}
+            types_to_prune = {sage_model.id_to_bytes(tid) for (loss, tid) in sorted_losses[:n_types_to_prune]}
             # double check there are no single bytes tokens to prune here
-            single_byte_tokens_to_prune = [token for token in tokens_to_prune if len(token) == 1]
-            assert len(single_byte_tokens_to_prune) == 0
+            assert len([token for token in types_to_prune if len(token) == 1]) == 0
 
             # our active vocabulary *after* pruning
             # is active if it has an entry in token_to_losses
             active_vocab = {tok: tid for tok, tid in sage_model.get_vocabulary().items()
-                            if tid in token_to_losses and tok not in tokens_to_prune}
+                            if tid in token_to_losses and tok not in types_to_prune}
 
             # our overall vocabulary after pruning
             target_vocab = {tok: tid for tok, tid in sage_model.get_vocabulary().items()
-                            if tok not in tokens_to_prune}
+                            if tok not in types_to_prune}
 
             # the deleted items
             deleted_vocab = {tok: tid for tok, tid in sage_model.get_vocabulary().items()
-                             if tok in tokens_to_prune}
+                             if tok in types_to_prune}
 
-            vocab_save_name = vocab_folder / f"sage_vocab_{target_vocab_size}.vocab"
-            logger.info(f"Saving intermediate vocab of size {len(target_vocab)} to {vocab_save_name.as_posix()}")
-            write_vocab(target_vocab, vocab_save_name)
+            path_full_vocab = vocab_folder / f"sage_vocab_{target_vocab_size}.vocab"
+            logger.info(f"Saving intermediate vocab of size {len(target_vocab)} to {path_full_vocab.as_posix()}")
+            write_vocab(target_vocab, path_full_vocab)
 
-            active_save_name = vocab_folder / f"active_vocab_{target_vocab_size}.vocab"
-            logger.info(f"Saving active vocab of size {len(active_vocab)} to {active_save_name.as_posix()}")
-            write_vocab(active_vocab, active_save_name)
+            path_active_vocab = vocab_folder / f"active_vocab_{target_vocab_size}.vocab"
+            logger.info(f"Saving active vocab of size {len(active_vocab)} to {path_active_vocab.as_posix()}")
+            write_vocab(active_vocab, path_active_vocab)
 
             # save the deleted ones too for analysis, with the original size
-            deleted_save_name = vocab_folder / f"deleted_vocab_{target_vocab_size}.vocab"
-            logger.info(f"Saving deleted vocab of size {len(deleted_vocab)} to {deleted_save_name.as_posix()}")
-            write_vocab(deleted_vocab, deleted_save_name)
+            path_pruned_vocab = vocab_folder / f"deleted_vocab_{target_vocab_size}.vocab"
+            logger.info(f"Saving deleted vocab of size {len(deleted_vocab)} to {path_pruned_vocab.as_posix()}")
+            write_vocab(deleted_vocab, path_pruned_vocab)
+
+            # save a version of the actual vocabulary that excludes tokens that were never seen
+            path_effective_vocab = vocab_folder / f"effective_vocab_{target_vocab_size}.vocab"
+            logger.info(f"Saving deleted vocab of size {len(deleted_vocab)} to {path_effective_vocab.as_posix()}")
+            write_vocab({typ: id for typ, id in target_vocab.items() if id in ever_active_types}, path_effective_vocab)
 
             # now update the internal state of sage_model to use the new smaller vocab
             # pass in list of bytes keys, which keep insertion order
             sage_model.set_vocabulary(list(target_vocab.keys()))
 
             logger.info(f"\nRound {i} - End: "
-                        f"\n\tCurrent step vocabulary size: {current_step_vocab_size}, "
-                        f"\n\tTarget vocabulary size: {target_vocab_size}, "
-                        f"\n\tActual vocabulary size:{len(active_vocab)}")
+                        f"\n\tCurrent step vocab size: {current_step_vocab_size}, "
+                        f"\n\tTarget vocab size: {target_vocab_size}, "
+                        f"\n\tActive vocab size (after pruning): {len(active_vocab)}")
 
             # advance to next smaller size
             i += 1
 
-        return vocab_folder / f"sage_vocab_{vocab_schedule[-1]}.vocab"
+        assert path_full_vocab is not None  # Not possible because the while is over len(schedule)-1 and the schedule has at least 2 points.
+        return path_full_vocab
