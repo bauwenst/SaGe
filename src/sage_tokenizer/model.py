@@ -13,24 +13,34 @@ ParsableVocabulary = Union[ Iterable[Union[bytes,hexstr]], Dict[Union[bytes,hexs
 
 class SaGeTokenizer:
 
-    def __init__(self, initial_vocabulary: ParsableVocabulary, max_len: int=16):
+    def __init__(self, initial_vocabulary: ParsableVocabulary, add_alphabet: bool=False, max_len: int=16):
         self.hfe = HFEncoding()
         self.byte_vocab: Dict[bytes, int]     = None
         self.inv_byte_vocab: Dict[int, bytes] = None
         self.str_vocab: Dict[str, int]        = None
         self.inv_str_vocab: Dict[int, str]    = None
 
-        self.set_vocabulary(initial_vocabulary)
+        self.set_vocabulary(initial_vocabulary, add_alphabet=add_alphabet)
         self.max_len = max_len
 
-    def set_vocabulary(self, new_vocab: ParsableVocabulary):
+    def set_vocabulary(self, new_vocab: ParsableVocabulary, add_alphabet: bool):
         """
         Given an order list of bytes for the vocabulary, initialise all internal structures
         overwriting any previous values.
         """
         # Set main bytes -> ID map, and make sure we always have all single bytes in vocabulary
         self.byte_vocab = SaGeTokenizer.parse_vocab(new_vocab)
-        verify_all_single_byte_exist_in_vocab(self.byte_vocab)
+
+        max_id = max(self.byte_vocab.values())
+        for i in range(256):
+            b = bytes([i])
+            if b not in self.byte_vocab:
+                if add_alphabet:
+                    max_id += 1
+                    self.byte_vocab[b] = max_id
+                else:
+                    raise Exception(f"missing byte {b}")
+
         # Inverted map ID -> bytes
         self.inv_byte_vocab = {v: k for (k, v) in self.byte_vocab.items()}
         # HuggingFace-equivalent of bytes -> ID
@@ -256,10 +266,3 @@ class SaGeTokenizer:
             print("long max_len:", max_len, '"' + sent.decode('utf-8') + '"')
 
         return total_tokens
-
-
-def verify_all_single_byte_exist_in_vocab(vocab):
-    for i in range(256):
-        b = bytes([i])
-        if b not in vocab:
-            raise Exception(f"missing byte {b}")
