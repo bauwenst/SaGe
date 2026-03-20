@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sage-tokenizer"
+name = "sage_bauwenst"
 version = "2.0.1"
 dependencies = [
     "gensim >= 4.3.2",
@@ -28,3 +28,6 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/MeLeLBGU/SaGe"
 Issues = "https://github.com/MeLeLBGU/SaGe/issues"
+
+[project.scripts]
+sage_vocabulary = "src.run:main"  # Left-hand side is the name of the command-line utility to create. Right-hand side is which file and which function it runs.

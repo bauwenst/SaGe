@@ -2,7 +2,7 @@
 
 import argparse
 
-from sage_tokenizer.SaGeVocabBuilder import SaGeVocabBuilder
+from sage.vocabulariser import SaGe
 
 
 def load_args():
@@ -46,9 +46,9 @@ def load_args():
     return vars(parser.parse_args())
 
 
-if __name__ == '__main__':
+def main():
     args = load_args()
-    vocab_builder = SaGeVocabBuilder(
+    vocab_builder = SaGe(
         full_vocab_schedule=args['vocabulary_schedule'],
         embeddings_schedule=args['embeddings_schedule'],
         max_len=args['max_len'],
@@ -62,7 +62,7 @@ if __name__ == '__main__':
         word2vec_sg=args['word2vec_sg']
     )
 
-    vocab_builder.build_vocab(
+    vocab_builder.build(
         experiment_name=args['experiment_name'],
         corpus=args['corpus_filepath'],
         initial_vocabulary=args['initial_vocabulary_filepath'],
@@ -70,3 +70,7 @@ if __name__ == '__main__':
 
         corpus_cache=args['partial_corpus_filepath'] if args['partial_corpus_filepath'] else "corpus"
     )
+
+
+if __name__ == '__main__':
+    main()

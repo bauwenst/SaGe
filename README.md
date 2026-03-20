@@ -1,4 +1,12 @@
-# SaGe 2.0
+# SaGe 2.0 refactored
+A refactor of the SaGe 2.0 code in the interest of better design.
+```
+pip install sage_bauwenst
+```
+
+---
+
+# Original README
 Version 2.0 for the SaGe subword tokenizer ([EACL 2023](https://aclanthology.org/2023.eacl-main.45/)), excelling in [morphological segmentation](https://aclanthology.org/2024.acl-short.73/). Downstream applications of the tokenizer, i.e. pre-training an LLM model and evaluating on benchmarks, are independent of the tokenizer code - in the paper we used [academic budget BERT](https://github.com/IntelLabs/academic-budget-bert).
 
 Pre-trained SaGe-based models are available in [this](https://github.com/kensho-technologies/timtc_vocabs_models) repository.
@@ -7,21 +15,18 @@ The large versions (2.4B params) produced the best results over BPE, UnigramLM, 
 SaGe 2.0 implements a faster, parallelizable version of the vocabulary learning algorithm.
 
 ```python
-from sage_tokenizer.SaGeVocabBuilder import SaGeVocabBuilder
-vocab_builder = SaGeVocabBuilder(full_vocab_schedule=[262144, 229376, 196608, 163840, 131072, 98304, 65536, 57344, 49152, 40960, 32768, 16384], 
-                                 embeddings_schedule=[262144, 131072, 65536, 49152, 40960, 32768],
-                                 workers_number=4)
+from sage import SaGe
 
-vocab_builder.build_vocab(experiment_name='experiment_name',
-                          initial_vocabulary='data/initial_vocab_hex.vocab',
-                          corpus='data/wiki_lines.txt')
+vocab_builder = SaGe(
+  full_vocab_schedule=[262144, 229376, 196608, 163840, 131072, 98304, 65536, 57344, 49152, 40960, 32768, 16384],
+  embeddings_schedule=[262144, 131072, 65536, 49152, 40960, 32768],
+  workers_number=4)
+
+vocab_builder.build(experiment_name='experiment_name',
+                    initial_vocabulary='data/initial_vocab_hex.vocab',
+                    corpus='data/wiki_lines.txt')
 ```
 The `.vocab` file can then be loaded as-is into most tokenization toolkits, such as Huggingface's `tokenizers`.
-
-SaGe tokenizer can be installed from PyPI:
-```
-pip install sage-tokenizer
-```
 
 ## Requirements
 1. `gensim==4.3.2`

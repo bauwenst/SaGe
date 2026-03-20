@@ -6,17 +6,17 @@ import logging
 import gensim.models
 import numpy as np
 
-from typing import List, Iterable
+from typing import Iterable
 from pathlib import Path
 
-from .Word2VecParams import Word2VecParams
-from .model import SaGeTokenizer
-from .utils import FileAsStringIterable, TokenisedStringIterable
+from .tokeniser import SageTokenizer
+from .util.iterables import FileAsStringIterable, TokenisedStringIterable
+from .util.dataclasses import Word2VecParams
 
 logger = logging.getLogger(__file__)
 
 
-def get_embeddings(vocab_size: int, embeddings_folder: Path, partial_corpus: Iterable[str], sage_model: SaGeTokenizer, workers_number: int, word2vec_params: Word2VecParams) -> np.ndarray:
+def get_embeddings(vocab_size: int, embeddings_folder: Path, partial_corpus: Iterable[str], sage_model: SageTokenizer, workers_number: int, word2vec_params: Word2VecParams) -> np.ndarray:
     logger.info(f"Training embeddings at vocab size {vocab_size}")
     embeddings_folder = Path(embeddings_folder)
 
@@ -36,11 +36,11 @@ def get_embeddings(vocab_size: int, embeddings_folder: Path, partial_corpus: Ite
     return embeddings
 
 
-def train_embeddings(sage_model: SaGeTokenizer, partial_corpus: Iterable[str], workers: int, word2vec_params: Word2VecParams, embeddings_folder: Path) -> np.ndarray:
-    tokenised_corpus = TokenisedStringIterable(partial_corpus, sage_model)
+def train_embeddings(sage_model: SageTokenizer, partial_corpus: Iterable[str], workers: int, word2vec_params: Word2VecParams, embeddings_folder: Path) -> np.ndarray:
+    tokenised_corpus = TokenisedStringIterable(partial_corpus, sage_model.pretokenize_and_tokenize_and_stringify)
 
     if isinstance(partial_corpus, FileAsStringIterable):  # GenSim is accelerated for file-stored corpora (https://github.com/RaRe-Technologies/gensim/releases/tag/3.6.0 and https://github.com/RaRe-Technologies/gensim/blob/develop/docs/notebooks/Any2Vec_Filebased.ipynb).
-        gensim_file = embeddings_folder / f"gensim_{sage_model.vocab_size()}.txt"
+        gensim_file = embeddings_folder / f"gensim_{sage_model.vocab.size()}.txt"
         if gensim_file.exists():  # Caching
             logger.info(f"Tokenized corpus already exists at {gensim_file.as_posix()}")
         else:
@@ -67,9 +67,9 @@ def train_embeddings(sage_model: SaGeTokenizer, partial_corpus: Iterable[str], w
         sg=word2vec_params.sg,
         workers=workers
     )
-    embeddings = np.zeros(shape=(sage_model.vocab_size(), word2vec_params.D))
+    embeddings = np.zeros(shape=(sage_model.vocab.size(), word2vec_params.D))
 
-    for idx, token in sage_model.inv_str_vocab.items():
+    for idx, token in sage_model.vocab.inv_str_vocab.items():
         if token in word2vec_model.wv.key_to_index.keys():
             embeddings[idx] = word2vec_model.wv[token]
         else:
