@@ -29,8 +29,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MeLeLBGU/SaGe"
-Issues = "https://github.com/MeLeLBGU/SaGe/issues"
+Source = "https://github.com/bauwenst/SaGe"
+Issues = "https://github.com/bauwenst/SaGe/issues"
 
 [project.scripts]
 sage_vocabulary = "src.run:main"  # Left-hand side is the name of the command-line utility to create. Right-hand side is which file and which function it runs.

@@ -232,7 +232,7 @@ class SaGe:
 
             # now update the internal state of sage_model to use the new smaller vocab
             # pass in list of bytes keys, which keep insertion order
-            sage_model.vocab.initialize(list(target_vocab.keys()))
+            sage_model.vocab.initialize(list(target_vocab.keys()), add_alphabet=True)
 
             logger.info(f"\nRound {i} - End: "
                         f"\n\tCurrent step vocab size: {current_step_vocab_size}, "
