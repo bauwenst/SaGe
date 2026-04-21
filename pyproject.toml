@@ -7,7 +7,7 @@ packages = ["src/sage"]
 
 [project]
 name = "sage_bauwenst"
-version = "v2.1.0"
+version = "v2.1.1"
 dependencies = [
     "gensim >= 4.3.2",
     "scipy >= 1.12.0",
